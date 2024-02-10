@@ -1,6 +1,12 @@
-import { DB } from "https://deno.land/x/sqlite@v3.8/mod.ts";
+import postgres from "https://deno.land/x/postgresjs@v3.4.3/mod.js";
 
-export const db = new DB("./db/sqlite.db");
+export const sql = postgres({
+  user: "postgres",
+  database: "postgres",
+  hostname: "postgres",
+  password: "postgres",
+  port: 5432,
+});
 
 export class CustomHttpError extends Error {
   constructor(readonly httpCode: number, readonly message: string) {
@@ -31,32 +37,33 @@ interface TransacoeResponse {
   ultimas_transacoes: Array<UserAccountTransaction>;
 }
 
-export function getUserAccount(id: number | string): Account {
-  const [userAccount] = db.query<[number, number, number]>(
-    "SELECT id, saldo, limite FROM account where id = ?",
-    [id]
-  );
-  if (!userAccount) {
+export async function getUserAccount(id: number | string): Promise<Account> {
+  const userAccount = await sql<{
+    id: number;
+    saldo: number;
+    limite: number;
+  }>`SELECT id, saldo, limite FROM account where id = ${id}`;
+  if (!userAccount[0]) {
     throw new CustomHttpError(404, "User not found");
   }
   return {
-    id: userAccount[0],
-    saldo: userAccount[1],
-    limite: userAccount[2],
+    id: userAccount[0].id,
+    saldo: userAccount[0].saldo,
+    limite: userAccount[0].limite,
   };
 }
 
-export function processPayment(
+export async function processPayment(
   id: string,
   transaction: Omit<UserAccountTransaction, "realizada_em">
-): Omit<Account, "id"> {
+): Promise<Omit<Account, "id">> {
   if (!["d", "c"].includes(transaction.tipo)) {
     throw new CustomHttpError(422, "Invalid transaction type");
   }
   if (!transaction.descricao || transaction.descricao.length > 10) {
     throw new CustomHttpError(422, "Invalid descricao");
   }
-  const userAccount = getUserAccount(id);
+  const userAccount = await getUserAccount(id);
   const valor =
     transaction.tipo === "d" ? -transaction.valor : transaction.valor;
   const updatedUserAccount = {
@@ -71,37 +78,39 @@ export function processPayment(
     throw new CustomHttpError(422, "Operation not allowed, insufficient funds");
   }
 
-  db.transaction(() => {
-    db.query(`
+  await sql.begin(async (sql) => {
+    await sql`
       INSERT INTO account_transaction (account_id, valor, tipo, descricao, realizada_em)
-      VALUES (${id}, ${transaction.valor}, '${transaction.tipo}', '${
+      VALUES (${id}, ${transaction.valor}, ${transaction.tipo}, ${
       transaction.descricao
-    }', '${new Date().toISOString()}')
-    `);
-    db.query(`
+    }, ${new Date().toISOString()})
+    `;
+    await sql`
       UPDATE account SET saldo = ${updatedUserAccount.saldo} WHERE id = ${id}
-    `);
+    `;
   });
 
   return updatedUserAccount;
 }
 
-export function getAccountTransations(id: number | string): TransacoeResponse {
-  const userAccount = getUserAccount(id);
-  const q = db.query<[number, string, string, string, number, number]>(`
+export async function getAccountTransations(
+  id: number | string
+): Promise<TransacoeResponse> {
+  const userAccount = await getUserAccount(id);
+  const rows = await sql<[UserAccountTransaction]>`
     SELECT t.valor, t.tipo, t.descricao, t.realizada_em FROM account_transaction t WHERE t.account_id = ${id} ORDER BY realizada_em DESC LIMIT 10
-  `);
+  `;
   return {
     saldo: {
       total: userAccount.saldo,
       data_extrato: new Date().toISOString(),
       limite: userAccount.limite,
     },
-    ultimas_transacoes: q.map((t) => ({
-      valor: t[0],
-      tipo: t[1],
-      descricao: t[2],
-      realizada_em: t[3],
+    ultimas_transacoes: rows.map((t: UserAccountTransaction) => ({
+      valor: t.valor,
+      tipo: t.tipo,
+      descricao: t.descricao,
+      realizada_em: t.realizada_em,
     })),
   };
 }

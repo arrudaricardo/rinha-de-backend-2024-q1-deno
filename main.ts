@@ -23,7 +23,7 @@ const handler = async (request: Request): Promise<Response> => {
 
       const body = (await request.json()) as Transacoe;
 
-      const userAccount = processPayment(id, body);
+      const userAccount = await processPayment(id, body)
 
       return new Response(JSON.stringify(userAccount), {
         status: 200,
@@ -34,7 +34,7 @@ const handler = async (request: Request): Promise<Response> => {
     } else if (reExtratoPath.test(url.pathname)) {
       const match = url.pathname.match(reExtratoPath) as RegExpMatchArray;
       const id = match.groups!.id;
-      const accountTransations = getAccountTransations(id);
+      const accountTransations = await getAccountTransations(id)
 
       return new Response(JSON.stringify(accountTransations), {
         status: 200,
@@ -58,4 +58,4 @@ const handler = async (request: Request): Promise<Response> => {
   throw new Error("No route handler was found for the path.");
 };
 
-Deno.serve({ port: 9999 }, handler);
+Deno.serve({ port: 8080, onError: () => Deno.exit() }, handler);
